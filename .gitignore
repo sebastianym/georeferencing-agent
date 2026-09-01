@@ -1,0 +1,34 @@
+\
+# Dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+
+# CDK
+infra/cdk.out/
+infra/cdk.context.json
+*.d.ts
+!jest.config.d.ts
+
+# Env / secrets - never commit real values
+.env
+.env.local
+.env.*.local
+
+# Build output
+dist/
+build/
+
+# Logs
+npm-debug.log*
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

@@ -1,0 +1,11 @@
+{
+  "name": "georeferencing-agent",
+  "private": true,
+  "version": "0.1.0",
+  "description": "POC: agente de sanitizacion/normalizacion de direcciones (HERE + Bedrock) sobre AWS",
+  "workspaces": [
+    "apps/*",
+    "services/*",
+    "infra"
+  ]
+}
