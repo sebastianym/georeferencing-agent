@@ -503,41 +503,70 @@ export const handler = async (event: { items: BatchItem[] }) => {
 
   const listText = records.map((r, i) => `${i + 1}. ${r.originalText}`).join('\n');
 
-  const converseResponse = await bedrock.send(
-    new ConverseCommand({
-      modelId: MODEL_ID,
-      system: [{ text: SYSTEM_PROMPT }],
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { guardContent: { text: { text: listText, qualifiers: ['grounding_source'] } } },
-            {
-              guardContent: {
-                text: {
-                  text: 'Normaliza cada una de estas direcciones colombianas para mejorar su geocodificacion, siguiendo estrictamente las reglas del system prompt.',
-                  qualifiers: ['query'],
+  // Appended only on the retry below. A soft "be conservative" nudge isn't
+  // enough — the model still applies its own allowed corrections (spelling,
+  // abbreviation expansion) on retry, and the grounding check compares
+  // fairly literally, so a corrected word that isn't a verbatim substring of
+  // the original (e.g. a typo fix) can fail grounding even though it's a
+  // legitimate, rule-3-sanctioned change. So the retry drops all correction
+  // rules and asks for the original text verbatim instead, which always
+  // grounds against itself. The address ends up unchanged either way (this
+  // path only runs after attempt 1 already got blocked), but the record
+  // lands as NO_IMPROVEMENT instead of FAILED_GUARDRAIL.
+  const RETRY_FEEDBACK =
+    ' Tu intento anterior fue rechazado por el validador de seguridad por incluir contenido que no pudo verificarse contra el texto original. ' +
+    'En este intento, ignora las reglas de correccion (no corrijas ortografia, no expandas abreviaturas, no reordenes nada): repeti cada direccion exactamente igual, caracter por caracter, tal como aparece en el texto original.';
+
+  async function callNormalize(retryFeedback?: string) {
+    return bedrock.send(
+      new ConverseCommand({
+        modelId: MODEL_ID,
+        system: [{ text: SYSTEM_PROMPT }],
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { guardContent: { text: { text: listText, qualifiers: ['grounding_source'] } } },
+              {
+                guardContent: {
+                  text: {
+                    text:
+                      'Normaliza cada una de estas direcciones colombianas para mejorar su geocodificacion, siguiendo estrictamente las reglas del system prompt.' +
+                      (retryFeedback ?? ''),
+                    qualifiers: ['query'],
+                  },
                 },
               },
-            },
-          ],
+            ],
+          },
+        ],
+        guardrailConfig: {
+          guardrailIdentifier: GUARDRAIL_ID,
+          guardrailVersion: GUARDRAIL_VERSION,
+          trace: 'enabled',
         },
-      ],
-      guardrailConfig: {
-        guardrailIdentifier: GUARDRAIL_ID,
-        guardrailVersion: GUARDRAIL_VERSION,
-        trace: 'enabled',
-      },
-      inferenceConfig: { maxTokens: Math.min(4096, 120 * records.length + 100), temperature: 0.1 },
-    })
-  );
+        inferenceConfig: { maxTokens: Math.min(4096, 120 * records.length + 100), temperature: 0.1 },
+      })
+    );
+  }
+
+  let converseResponse = await callNormalize();
 
   if (converseResponse.stopReason === 'guardrail_intervened') {
     // Grounding/topic checks run over the whole batch response at once, so a
     // block takes down the whole batch rather than a single item — this is
     // the tradeoff for batching (see PROCESSING_BATCH_SIZE in the CDK stack).
-    console.log('GUARDRAIL_TRACE', JSON.stringify(converseResponse.trace));
-    console.log('MODEL_OUTPUT', JSON.stringify(converseResponse.output));
+    console.log('GUARDRAIL_TRACE_ATTEMPT_1', JSON.stringify(converseResponse.trace));
+    console.log('MODEL_OUTPUT_ATTEMPT_1', JSON.stringify(converseResponse.output));
+    // One retry with explicit feedback, not a blind repeat — at temperature
+    // 0.1 the model is close to deterministic, so re-sending the identical
+    // request tends to reproduce the identical (blocked) output.
+    converseResponse = await callNormalize(RETRY_FEEDBACK);
+  }
+
+  if (converseResponse.stopReason === 'guardrail_intervened') {
+    console.log('GUARDRAIL_TRACE_FINAL', JSON.stringify(converseResponse.trace));
+    console.log('MODEL_OUTPUT_FINAL', JSON.stringify(converseResponse.output));
     await markGuardrailBlocked(records, now);
     return { processed: records.length, blocked: records.length };
   }
