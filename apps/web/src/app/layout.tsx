@@ -6,7 +6,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Agente de Georeferenciación",
-  description: "Sanitización y normalización de direcciones con HERE e IA generativa",
+  description: "Sanitización y optimización de direcciones con inteligencia artificial",
 };
 
 const HERE_MAPS_VERSION = "3.2";

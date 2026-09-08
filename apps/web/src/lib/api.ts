@@ -28,7 +28,7 @@ export interface AddressRecord {
   precisionAfter?: number;
   detailLevelAfter?: string;
   hereResultAfter?: HereResult;
-  hereMatchSource?: 'geocode' | 'autosuggest' | 'none';
+  hereMatchSource?: 'geocode' | 'autosuggest' | 'google' | 'arcgis' | 'none';
   flaggedForReview?: boolean;
 }
 

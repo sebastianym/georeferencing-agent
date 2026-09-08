@@ -42,6 +42,25 @@ export function computeDensityCells(
   }));
 }
 
+// Per-address audit resolution — finer than the map's adaptive density
+// resolution since this identifies one specific spot, not a zone of
+// concentration. Resolution 9 is ~0.1 km² (roughly a city block).
+export const ADDRESS_H3_RESOLUTION = 9;
+
+export function getH3Cell(
+  position: { lat: number; lng: number },
+  resolution: number = ADDRESS_H3_RESOLUTION
+): string {
+  return latLngToCell(position.lat, position.lng, resolution);
+}
+
+export function getH3Boundary(
+  position: { lat: number; lng: number },
+  resolution: number = ADDRESS_H3_RESOLUTION
+): { lat: number; lng: number }[] {
+  return cellToBoundary(getH3Cell(position, resolution)).map(([lat, lng]) => ({ lat, lng }));
+}
+
 export function densityColor(count: number, maxCount: number): string {
   const ratio = maxCount > 0 ? count / maxCount : 0;
   if (ratio > 0.75) return '#b91c1c';

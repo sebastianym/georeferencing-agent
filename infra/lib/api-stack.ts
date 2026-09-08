@@ -1,4 +1,4 @@
-import { Duration, Stack, StackProps } from 'aws-cdk-lib';
+import { CfnOutput, Duration, Stack, StackProps } from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
@@ -8,6 +8,8 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
+import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as path from 'path';
 
 export interface ApiStackProps extends StackProps {
@@ -138,5 +140,26 @@ export class ApiStack extends Stack {
       resourceArn: this.service.loadBalancer.loadBalancerArn,
       webAclArn: webAcl.attrArn,
     });
+
+    // The ALB has no ACM certificate (no custom domain for this POC), so it
+    // only serves HTTP — which the Amplify-hosted frontend (HTTPS) can't
+    // call directly due to mixed-content blocking. Fronting it with
+    // CloudFront gives free HTTPS via the default *.cloudfront.net
+    // certificate without needing a domain. The WAF above stays attached to
+    // the ALB directly; this distribution is just a TLS passthrough.
+    const distribution = new cloudfront.Distribution(this, 'ApiDistribution', {
+      comment: 'HTTPS front door for the georeferencing-agent API ALB',
+      defaultBehavior: {
+        origin: new origins.HttpOrigin(this.service.loadBalancer.loadBalancerDnsName, {
+          protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+        }),
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+        cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+        originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+      },
+    });
+
+    new CfnOutput(this, 'ApiHttpsUrl', { value: `https://${distribution.distributionDomainName}` });
   }
 }

@@ -21,6 +21,8 @@ const processing = new ProcessingStack(app, 'GeoAgent-Processing', {
   env,
   addressesTable: data.addressesTable,
   hereSecretName: 'georeferencing-agent/here-api-key',
+  googleMapsSecretName: 'georeferencing-agent/google-maps-api-key',
+  arcgisSecretName: 'georeferencing-agent/arcgis-api-key',
   guardrail: agent.guardrail,
   guardrailVersion: agent.guardrailVersion,
 });

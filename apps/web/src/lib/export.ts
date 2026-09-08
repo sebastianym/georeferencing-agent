@@ -1,11 +1,12 @@
 import type { AddressRecord } from '@/lib/api';
+import { STATUS_LABELS } from '@/lib/labels';
 
 const CSV_COLUMNS = [
   'id',
   'direccion_original',
   'precision_antes',
   'nivel_detalle_antes',
-  'direccion_normalizada',
+  'direccion_optimizada',
   'precision_despues',
   'nivel_detalle_despues',
   'fuente_match',
@@ -23,11 +24,11 @@ function toRow(addr: AddressRecord): Record<(typeof CSV_COLUMNS)[number], unknow
     direccion_original: addr.originalText,
     precision_antes: addr.precisionBefore ?? '',
     nivel_detalle_antes: addr.detailLevelBefore ?? '',
-    direccion_normalizada: addr.normalizedText ?? '',
+    direccion_optimizada: addr.normalizedText ?? '',
     precision_despues: addr.precisionAfter ?? '',
     nivel_detalle_despues: addr.detailLevelAfter ?? '',
     fuente_match: addr.hereMatchSource ?? '',
-    estado: addr.status,
+    estado: STATUS_LABELS[addr.status] ?? addr.status,
   };
 }
 

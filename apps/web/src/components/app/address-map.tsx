@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { densityColor, type DensityCell } from '@/lib/density';
+import { densityColor, getH3Cell, getH3Boundary, type DensityCell } from '@/lib/density';
 
 declare global {
   interface Window {
@@ -36,6 +36,20 @@ function useHereMapsReady() {
     };
   }, []);
   return ready;
+}
+
+function drawHexagon(
+  H: any,
+  group: any,
+  boundary: { lat: number; lng: number }[],
+  style: { fillColor: string; strokeColor: string; lineWidth: number }
+) {
+  const flat = boundary.flatMap(({ lat, lng }) => [lat, lng, 0]);
+  flat.push(boundary[0].lat, boundary[0].lng, 0);
+  const lineString = new H.geo.LineString(flat);
+  const polygon = new H.map.Polygon(new H.geo.Polygon(lineString), { style });
+  group.addObject(polygon);
+  return polygon;
 }
 
 function markerIcon(color: string) {
@@ -116,15 +130,13 @@ export function AddressMap({
       if (!hexagons || hexagons.length === 0) return;
       const maxCount = Math.max(...hexagons.map((h) => h.count));
       for (const hex of hexagons) {
-        const flat = hex.boundary.flatMap(({ lat, lng }) => [lat, lng, 0]);
-        flat.push(hex.boundary[0].lat, hex.boundary[0].lng, 0);
-        const lineString = new H.geo.LineString(flat);
         const color = densityColor(hex.count, maxCount);
-        const polygon = new H.map.Polygon(new H.geo.Polygon(lineString), {
-          style: { fillColor: `${color}99`, strokeColor: color, lineWidth: 1.5 },
+        const polygon = drawHexagon(H, group, hex.boundary, {
+          fillColor: `${color}99`,
+          strokeColor: color,
+          lineWidth: 1.5,
         });
         polygon.setData(`${hex.count} ${hex.count === 1 ? 'dirección' : 'direcciones'}`);
-        group.addObject(polygon);
       }
       map.getViewModel().setLookAtData({ bounds: group.getBoundingBox() });
       return;
@@ -133,6 +145,15 @@ export function AddressMap({
     if (points.length === 0) return;
 
     for (const point of points) {
+      // Show each address's own H3 cell under its pin, so precision and
+      // spatial granularity are visible on the same map, not just in the
+      // audit panel's text. Drawn before the marker so the pin sits on top.
+      const hexPolygon = drawHexagon(H, group, getH3Boundary(point.position), {
+        fillColor: '#8b5cf633',
+        strokeColor: '#8b5cf6',
+        lineWidth: 1.5,
+      });
+      hexPolygon.setData(`Código de zona: ${getH3Cell(point.position)}`);
       const marker = new H.map.Marker(point.position, { icon: markerIcon(point.color) });
       marker.setData(point.label);
       group.addObject(marker);
@@ -149,7 +170,7 @@ export function AddressMap({
   if (!apiKey) {
     return (
       <div className="flex h-full min-h-64 items-center justify-center rounded-lg border bg-muted/20 text-sm text-muted-foreground">
-        Falta NEXT_PUBLIC_HERE_API_KEY para mostrar el mapa.
+        Falta configurar el proveedor de mapas.
       </div>
     );
   }

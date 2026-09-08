@@ -6,7 +6,7 @@ import { Gauge, ShieldCheck, Layers } from 'lucide-react';
 
 const FEATURES = [
   { icon: Gauge, label: 'Precisión medible antes y después' },
-  { icon: ShieldCheck, label: 'Agente con guardrails, sin inventar datos' },
+  { icon: ShieldCheck, label: 'Validaciones estrictas, sin inventar datos' },
   { icon: Layers, label: 'Direcciones individuales o en lote' },
 ];
 
@@ -16,11 +16,12 @@ export default function Home() {
       <div className="flex w-full max-w-2xl flex-col gap-10">
         <div className="flex flex-col items-center gap-4 text-center">
           <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
-            Agente de normalización de direcciones
+            Agente de optimización de direcciones
           </h1>
           <p className="max-w-xl text-balance text-muted-foreground">
-            Validá una dirección contra HERE, dejá que un agente con IA la normalice y comparé la
-            precisión antes y después — sin inventar información que no esté en el texto original.
+            Validá una dirección contra nuestro motor de geocodificación, dejá que un agente con IA la
+            optimice y comparé la precisión antes y después — sin inventar información que no esté en
+            el texto original.
           </p>
           <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 pt-1">
             {FEATURES.map(({ icon: Icon, label }) => (

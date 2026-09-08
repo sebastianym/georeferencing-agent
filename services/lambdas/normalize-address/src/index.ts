@@ -9,19 +9,27 @@ const bedrock = new BedrockRuntimeClient({});
 
 const ADDRESSES_TABLE = process.env.ADDRESSES_TABLE!;
 const HERE_SECRET_ARN = process.env.HERE_SECRET_ARN!;
+const GOOGLE_MAPS_SECRET_ARN = process.env.GOOGLE_MAPS_SECRET_ARN!;
+const ARCGIS_SECRET_ARN = process.env.ARCGIS_SECRET_ARN!;
 const MODEL_ID = process.env.BEDROCK_MODEL_ID!;
 const GUARDRAIL_ID = process.env.GUARDRAIL_ID!;
 const GUARDRAIL_VERSION = process.env.GUARDRAIL_VERSION!;
 
-let cachedApiKey: string | undefined;
+const secretCache = new Map<string, string>();
 
-async function getHereApiKey(): Promise<string> {
-  if (cachedApiKey) return cachedApiKey;
-  const res = await secretsClient.send(new GetSecretValueCommand({ SecretId: HERE_SECRET_ARN }));
-  cachedApiKey = JSON.parse(res.SecretString ?? '{}').apiKey;
-  if (!cachedApiKey) throw new Error('HERE api key missing in secret');
-  return cachedApiKey;
+async function getApiKey(secretArn: string, label: string): Promise<string> {
+  const cached = secretCache.get(secretArn);
+  if (cached) return cached;
+  const res = await secretsClient.send(new GetSecretValueCommand({ SecretId: secretArn }));
+  const apiKey = JSON.parse(res.SecretString ?? '{}').apiKey;
+  if (!apiKey) throw new Error(`${label} api key missing in secret`);
+  secretCache.set(secretArn, apiKey);
+  return apiKey;
 }
+
+const getHereApiKey = () => getApiKey(HERE_SECRET_ARN, 'HERE');
+const getGoogleMapsApiKey = () => getApiKey(GOOGLE_MAPS_SECRET_ARN, 'Google Maps');
+const getArcgisApiKey = () => getApiKey(ARCGIS_SECRET_ARN, 'ArcGIS');
 
 const SYSTEM_PROMPT = `Eres un asistente que normaliza direcciones postales colombianas para mejorar su geocodificacion con HERE Maps. Procesas direcciones de cualquier region de Colombia.
 
@@ -126,6 +134,24 @@ interface HereItem {
   address: { label: string };
   position?: { lat: number; lng: number };
   scoring?: { queryScore: number };
+}
+
+// Common shape every geocoding provider's winning candidate gets normalized
+// into, so the rest of the pipeline (DynamoDB write, frontend) never needs to
+// know which one actually produced it.
+interface GeoWinner {
+  label: string;
+  resultType: string;
+  position?: { lat: number; lng: number };
+}
+
+type GeoSource = 'geocode' | 'autosuggest' | 'google' | 'arcgis' | 'none';
+
+interface ResolveResult {
+  winner?: GeoWinner;
+  precision: number;
+  detailLevel: string;
+  source: GeoSource;
 }
 
 function detailLevelFromResultType(resultType: string | undefined): string {
@@ -240,7 +266,11 @@ function scorePlaceMatch(item: HereItem, originalText: string): number {
   return Math.round(55 + ratio * 40);
 }
 
-async function resolveWithHere(apiKey: string, normalizedAddress: string, originalText: string) {
+async function resolveWithHere(
+  apiKey: string,
+  normalizedAddress: string,
+  originalText: string
+): Promise<ResolveResult> {
   // Two independent lookups, best candidate wins. /geocode is the reliable
   // choice for structured addresses (street + house number); /autosuggest
   // is the one that can land on a named business/landmark when that's the
@@ -251,14 +281,184 @@ async function resolveWithHere(apiKey: string, normalizedAddress: string, origin
   const geocodeScore = geocodeResult ? Math.round((geocodeResult.scoring?.queryScore ?? 0) * 100) : -1;
   const placeScore = placeResult ? scorePlaceMatch(placeResult, originalText) : -1;
 
-  const useCandidate: 'geocode' | 'autosuggest' | 'none' =
-    placeScore > geocodeScore ? 'autosuggest' : geocodeResult ? 'geocode' : 'none';
+  const useCandidate: GeoSource = placeScore > geocodeScore ? 'autosuggest' : geocodeResult ? 'geocode' : 'none';
 
-  const winner = useCandidate === 'autosuggest' ? placeResult : geocodeResult;
+  const winnerItem = useCandidate === 'autosuggest' ? placeResult : geocodeResult;
   const precision = useCandidate === 'autosuggest' ? placeScore : Math.max(geocodeScore, 0);
-  const detailLevel = winner ? detailLevelFromResultType(winner.resultType) : 'No encontrado';
+  const detailLevel = winnerItem ? detailLevelFromResultType(winnerItem.resultType) : 'No encontrado';
 
-  return { winner, precision, detailLevel, source: useCandidate };
+  return {
+    winner: winnerItem
+      ? { label: winnerItem.address.label, resultType: winnerItem.resultType, position: winnerItem.position }
+      : undefined,
+    precision,
+    detailLevel,
+    source: useCandidate,
+  };
+}
+
+// --- Secondary geocoders: only consulted when HERE's result falls short of
+// GOOD_ENOUGH_PRECISION (see resolveAddress below). Each maps its own native
+// confidence/category vocabulary onto the same 0-100 scale and Spanish detail
+// labels HERE already uses, so a candidate from any provider is comparable.
+
+function detailLevelFromGoogleTypes(types: string[] | undefined): string {
+  const set = new Set(types ?? []);
+  if (set.has('street_address') || set.has('premise') || set.has('subpremise')) return 'Dirección exacta';
+  if (set.has('route')) return 'Calle';
+  if (set.has('intersection')) return 'Intersección';
+  if (set.has('point_of_interest') || set.has('establishment')) return 'Punto de interés';
+  if (set.has('neighborhood') || set.has('sublocality')) return 'Barrio / distrito';
+  if (set.has('locality')) return 'Ciudad';
+  if (set.has('postal_code')) return 'Código postal';
+  if (set.has('administrative_area_level_1') || set.has('administrative_area_level_2')) return 'Región';
+  return 'No determinado';
+}
+
+// Google's Geocoding API doesn't return a numeric confidence, only a
+// geometry.location_type category — this is the closest honest mapping onto
+// our 0-100 scale (ROOFTOP is a real building match; APPROXIMATE can be as
+// coarse as a city centroid).
+function precisionFromGoogleLocationType(locationType: string | undefined): number {
+  switch (locationType) {
+    case 'ROOFTOP':
+      return 95;
+    case 'RANGE_INTERPOLATED':
+      return 80;
+    case 'GEOMETRIC_CENTER':
+      return 55;
+    case 'APPROXIMATE':
+      return 35;
+    default:
+      return 0;
+  }
+}
+
+interface GoogleGeocodeResponse {
+  results: Array<{
+    formatted_address: string;
+    geometry: { location: { lat: number; lng: number }; location_type: string };
+    types: string[];
+  }>;
+}
+
+async function resolveWithGoogle(apiKey: string, text: string): Promise<ResolveResult> {
+  const url = new URL('https://maps.googleapis.com/maps/api/geocode/json');
+  url.searchParams.set('address', text);
+  url.searchParams.set('components', 'country:CO');
+  url.searchParams.set('language', 'es');
+  url.searchParams.set('key', apiKey);
+  const response = await fetch(url.toString());
+  if (!response.ok) {
+    throw new Error(`Google geocode request failed: ${response.status} ${await response.text()}`);
+  }
+  const body = (await response.json()) as GoogleGeocodeResponse;
+  const result = body.results?.[0];
+  if (!result) return { precision: 0, detailLevel: 'No encontrado', source: 'none' };
+
+  return {
+    winner: {
+      label: result.formatted_address,
+      resultType: result.geometry.location_type,
+      position: result.geometry.location,
+    },
+    precision: precisionFromGoogleLocationType(result.geometry.location_type),
+    detailLevel: detailLevelFromGoogleTypes(result.types),
+    source: 'google',
+  };
+}
+
+function detailLevelFromArcgisAddrType(addrType: string | undefined): string {
+  switch (addrType) {
+    case 'PointAddress':
+    case 'StreetAddress':
+      return 'Dirección exacta';
+    case 'StreetName':
+      return 'Calle';
+    case 'Intersection':
+      return 'Intersección';
+    case 'POI':
+      return 'Punto de interés';
+    case 'Neighborhood':
+      return 'Barrio / distrito';
+    case 'Locality':
+      return 'Ciudad';
+    case 'Postal':
+      return 'Código postal';
+    default:
+      return 'No determinado';
+  }
+}
+
+interface ArcgisCandidatesResponse {
+  candidates: Array<{
+    address: string;
+    location: { x: number; y: number };
+    score: number;
+    attributes: { Addr_type: string };
+  }>;
+}
+
+async function resolveWithArcGIS(apiKey: string, text: string): Promise<ResolveResult> {
+  const url = new URL('https://geocode-api.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates');
+  url.searchParams.set('SingleLine', text);
+  url.searchParams.set('f', 'json');
+  url.searchParams.set('token', apiKey);
+  url.searchParams.set('countryCode', 'COL');
+  url.searchParams.set('outFields', 'Addr_type');
+  url.searchParams.set('maxLocations', '1');
+  const response = await fetch(url.toString());
+  if (!response.ok) {
+    throw new Error(`ArcGIS geocode request failed: ${response.status} ${await response.text()}`);
+  }
+  const body = (await response.json()) as ArcgisCandidatesResponse;
+  const result = body.candidates?.[0];
+  if (!result) return { precision: 0, detailLevel: 'No encontrado', source: 'none' };
+
+  return {
+    winner: {
+      label: result.address,
+      resultType: result.attributes.Addr_type,
+      // ArcGIS returns location as x/y (lng/lat), not lat/lng.
+      position: { lat: result.location.y, lng: result.location.x },
+    },
+    precision: Math.round(result.score),
+    detailLevel: detailLevelFromArcgisAddrType(result.attributes.Addr_type),
+    source: 'arcgis',
+  };
+}
+
+// A HERE match at or above this is treated as good enough to stop — below
+// it, the cascade pays for a second (and if needed third) opinion from
+// Google/ArcGIS and keeps whichever result scores highest. Keeps the common
+// case (HERE already nails it) cheap and fast, and only spends the extra
+// calls on the addresses that actually need them.
+const GOOD_ENOUGH_PRECISION = 90;
+
+async function resolveAddress(
+  apiKeys: { here: string; google: string; arcgis: string },
+  normalizedAddress: string,
+  originalText: string
+): Promise<ResolveResult> {
+  let best = await resolveWithHere(apiKeys.here, normalizedAddress, originalText);
+
+  if (best.precision < GOOD_ENOUGH_PRECISION) {
+    const google = await resolveWithGoogle(apiKeys.google, normalizedAddress).catch((err) => {
+      console.log('GOOGLE_GEOCODE_ERROR', String(err));
+      return undefined;
+    });
+    if (google && google.precision > best.precision) best = google;
+  }
+
+  if (best.precision < GOOD_ENOUGH_PRECISION) {
+    const arcgis = await resolveWithArcGIS(apiKeys.arcgis, normalizedAddress).catch((err) => {
+      console.log('ARCGIS_GEOCODE_ERROR', String(err));
+      return undefined;
+    });
+    if (arcgis && arcgis.precision > best.precision) best = arcgis;
+  }
+
+  return best;
 }
 
 interface BatchItem {
@@ -346,7 +546,11 @@ export const handler = async (event: { items: BatchItem[] }) => {
     converseResponse.output?.message?.content?.find((c) => 'text' in c && c.text)?.text ?? '';
   const parsed = parseNumberedList(outputText, records.length);
 
-  const apiKey = await getHereApiKey();
+  const apiKeys = {
+    here: await getHereApiKey(),
+    google: await getGoogleMapsApiKey(),
+    arcgis: await getArcgisApiKey(),
+  };
 
   await Promise.all(
     records.map(async (record, i) => {
@@ -359,8 +563,8 @@ export const handler = async (event: { items: BatchItem[] }) => {
       }
 
       const ungroundedTokens = findUngroundedContent(record.originalText, normalizedAddress);
-      const { winner, precision, detailLevel, source } = await resolveWithHere(
-        apiKey,
+      const { winner, precision, detailLevel, source } = await resolveAddress(
+        apiKeys,
         normalizedAddress,
         record.originalText
       );
@@ -413,7 +617,7 @@ export const handler = async (event: { items: BatchItem[] }) => {
             ':precision': precision,
             ':detail': detailLevel,
             ':here': winner
-              ? { label: winner.address.label, resultType: winner.resultType, position: winner.position }
+              ? { label: winner.label, resultType: winner.resultType, position: winner.position }
               : null,
             ':source': source,
             ':now': now,

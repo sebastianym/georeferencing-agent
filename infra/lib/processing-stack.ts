@@ -13,6 +13,8 @@ import * as path from 'path';
 export interface ProcessingStackProps extends StackProps {
   addressesTable: dynamodb.Table;
   hereSecretName: string;
+  googleMapsSecretName: string;
+  arcgisSecretName: string;
   guardrail: bedrock.CfnGuardrail;
   guardrailVersion: bedrock.CfnGuardrailVersion;
   bedrockModelId?: string;
@@ -48,6 +50,20 @@ export class ProcessingStack extends Stack {
       'HereApiKeySecret',
       props.hereSecretName
     );
+    // Secondary geocoders in the precision cascade — only consulted by
+    // NormalizeAddressFunction when HERE's result isn't precise enough
+    // (see GOOD_ENOUGH_PRECISION in the Lambda), never by the cheap initial
+    // validation pass.
+    const googleMapsSecret = secretsmanager.Secret.fromSecretNameV2(
+      this,
+      'GoogleMapsApiKeySecret',
+      props.googleMapsSecretName
+    );
+    const arcgisSecret = secretsmanager.Secret.fromSecretNameV2(
+      this,
+      'ArcgisApiKeySecret',
+      props.arcgisSecretName
+    );
 
     const repoRoot = path.join(__dirname, '../../');
     const commonNodeJsProps: Partial<nodejs.NodejsFunctionProps> = {
@@ -72,13 +88,17 @@ export class ProcessingStack extends Stack {
     const normalizeAddressFn = new nodejs.NodejsFunction(this, 'NormalizeAddressFunction', {
       ...commonNodeJsProps,
       // A single invocation now handles a batch (one Bedrock call covering
-      // several addresses, then up to 2 HERE calls per address run in
-      // parallel), so it needs more headroom than a single-item call did.
-      timeout: Duration.seconds(90),
+      // several addresses, then a per-address geocoding cascade — HERE,
+      // falling back to Google/ArcGIS only when HERE isn't precise enough —
+      // run in parallel across the batch), so it needs more headroom than a
+      // single-item call did.
+      timeout: Duration.seconds(120),
       entry: path.join(__dirname, '../../services/lambdas/normalize-address/src/index.ts'),
       environment: {
         ADDRESSES_TABLE: addressesTable.tableName,
         HERE_SECRET_ARN: hereSecret.secretArn,
+        GOOGLE_MAPS_SECRET_ARN: googleMapsSecret.secretArn,
+        ARCGIS_SECRET_ARN: arcgisSecret.secretArn,
         BEDROCK_MODEL_ID: modelId,
         GUARDRAIL_ID: guardrail.attrGuardrailId,
         // DRAFT always reflects the guardrail's current saved config, so
@@ -95,6 +115,8 @@ export class ProcessingStack extends Stack {
       addressesTable.grantReadWriteData(fn);
       hereSecret.grantRead(fn);
     }
+    googleMapsSecret.grantRead(normalizeAddressFn);
+    arcgisSecret.grantRead(normalizeAddressFn);
 
     normalizeAddressFn.addToRolePolicy(
       new iam.PolicyStatement({

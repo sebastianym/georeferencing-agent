@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   Table,
@@ -16,13 +16,26 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PrecisionIndicator } from '@/components/app/precision-indicator';
 import { AddressMap, type MapPoint } from '@/components/app/address-map';
+import { AddressAuditPanel } from '@/components/app/address-audit-panel';
 import { getJob, normalizeAddresses, type JobDetail, type AddressRecord } from '@/lib/api';
 import { precisionTone } from '@/lib/precision';
 import { STATUS_LABELS } from '@/lib/labels';
 import { downloadAddressesAsCsv, downloadAddressesAsJson } from '@/lib/export';
 import { computeDensityCells, type DensityCell } from '@/lib/density';
 import { toast } from 'sonner';
-import { ArrowLeft, ArrowRight, Download, Hexagon, Loader2, MapPin, MapPinned, Sparkles, TriangleAlert } from 'lucide-react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  ChevronDown,
+  ChevronRight,
+  Download,
+  Hexagon,
+  Loader2,
+  MapPin,
+  MapPinned,
+  Sparkles,
+  TriangleAlert,
+} from 'lucide-react';
 
 const IN_PROGRESS_STATUSES = new Set(['PENDING']);
 const MAX_POST_NORMALIZE_POLLS = 40;
@@ -56,7 +69,7 @@ function statusBadge(status: AddressRecord['status']) {
     case 'NOT_FOUND':
       return <Badge variant="destructive">No encontrada</Badge>;
     case 'FAILED_GUARDRAIL':
-      return <Badge variant="destructive">Bloqueada por guardrail</Badge>;
+      return <Badge variant="destructive">Bloqueada por validación</Badge>;
     case 'NORMALIZED':
       return <Badge className="bg-brand text-brand-foreground hover:bg-brand">{STATUS_LABELS.NORMALIZED}</Badge>;
     case 'NO_IMPROVEMENT':
@@ -84,6 +97,7 @@ export function JobView({ jobId }: { jobId: string }) {
   const [normalizing, setNormalizing] = useState(false);
   const [statusFilter, setStatusFilter] = useState<AddressRecord['status'] | null>(null);
   const [mapMode, setMapMode] = useState<'pins' | 'density'>('pins');
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const postNormalizePolls = useRef(0);
   const pendingNormalizeIds = useRef<Set<string>>(new Set());
 
@@ -194,7 +208,7 @@ export function JobView({ jobId }: { jobId: string }) {
       setSelected(new Set());
       await fetchJob();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'No se pudo iniciar la normalización.');
+      toast.error(err instanceof Error ? err.message : 'No se pudo iniciar la optimización.');
       setNormalizing(false);
     }
   }
@@ -232,6 +246,15 @@ export function JobView({ jobId }: { jobId: string }) {
 
   function toggleStatusFilter(status: AddressRecord['status']) {
     setStatusFilter((prev) => (prev === status ? null : status));
+  }
+
+  function toggleExpanded(addressId: string) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(addressId)) next.delete(addressId);
+      else next.add(addressId);
+      return next;
+    });
   }
 
   return (
@@ -285,13 +308,13 @@ export function JobView({ jobId }: { jobId: string }) {
           {isValidating && (
             <div className="flex items-center gap-2 rounded-md border border-dashed p-3 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin" />
-              Validando direcciones contra HERE…
+              Validando direcciones…
             </div>
           )}
 
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-sm text-muted-foreground">
-              Marcá direcciones para verlas en el mapa, o para enviarlas al agente de normalización.
+              Marcá direcciones para verlas en el mapa, o para enviarlas al agente de optimización.
             </p>
             <div className="flex items-center gap-2">
               <Button
@@ -316,7 +339,7 @@ export function JobView({ jobId }: { jobId: string }) {
                 className="bg-brand text-brand-foreground hover:bg-brand-hover disabled:bg-primary/50"
               >
                 {normalizing ? <Loader2 className="animate-spin" /> : <Sparkles />}
-                Normalizar seleccionadas ({normalizableSelectedIds.length})
+                Optimizar seleccionadas ({normalizableSelectedIds.length})
               </Button>
             </div>
           </div>
@@ -334,17 +357,20 @@ export function JobView({ jobId }: { jobId: string }) {
                       disabled={eligibleCount === 0}
                     />
                   </TableHead>
-                  <TableHead className="w-[26%]">Original</TableHead>
-                  <TableHead className="w-40">Precisión (antes)</TableHead>
-                  <TableHead className="w-[26%]">Normalizada</TableHead>
-                  <TableHead className="w-40">Precisión (después)</TableHead>
+                  <TableHead className="w-[25%]">Original</TableHead>
+                  <TableHead className="w-36">Precisión (antes)</TableHead>
+                  <TableHead className="w-[25%]">Optimizada</TableHead>
+                  <TableHead className="w-36">Precisión (después)</TableHead>
                   <TableHead className="w-35">Estado</TableHead>
+                  <TableHead className="w-8" />
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {visibleAddresses.map((addr) => (
+                {visibleAddresses.map((addr) => {
+                  const isExpanded = expandedIds.has(addr.addressId);
+                  return (
+                  <Fragment key={addr.addressId}>
                   <TableRow
-                    key={addr.addressId}
                     data-selected={selected.has(addr.addressId)}
                     className="data-[selected=true]:bg-primary/5"
                   >
@@ -352,7 +378,6 @@ export function JobView({ jobId }: { jobId: string }) {
                       <Checkbox
                         checked={selected.has(addr.addressId)}
                         onCheckedChange={(c) => toggleOne(addr.addressId, Boolean(c))}
-                        disabled={!needsNormalization(addr)}
                       />
                     </TableCell>
                     <TableCell className="whitespace-normal wrap-break-word text-sm">
@@ -371,6 +396,11 @@ export function JobView({ jobId }: { jobId: string }) {
                           {addr.hereMatchSource === 'autosuggest' && (
                             <Badge variant="outline" className="w-fit gap-1 text-xs">
                               <MapPin className="size-3" /> vía búsqueda de lugares
+                            </Badge>
+                          )}
+                          {(addr.hereMatchSource === 'google' || addr.hereMatchSource === 'arcgis') && (
+                            <Badge variant="outline" className="w-fit gap-1 text-xs">
+                              <MapPin className="size-3" /> vía fuente alternativa
                             </Badge>
                           )}
                           {addr.flaggedForReview && (
@@ -395,8 +425,27 @@ export function JobView({ jobId }: { jobId: string }) {
                       )}
                     </TableCell>
                     <TableCell className="whitespace-nowrap">{statusBadge(addr.status)}</TableCell>
+                    <TableCell>
+                      <button
+                        type="button"
+                        onClick={() => toggleExpanded(addr.addressId)}
+                        className="flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+                        aria-label={isExpanded ? 'Ocultar detalle de auditoría' : 'Ver detalle de auditoría'}
+                      >
+                        {isExpanded ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+                      </button>
+                    </TableCell>
                   </TableRow>
-                ))}
+                  {isExpanded && (
+                    <TableRow>
+                      <TableCell colSpan={7} className="bg-muted/20 p-3">
+                        <AddressAuditPanel addr={addr} />
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  </Fragment>
+                  );
+                })}
               </TableBody>
             </Table>
           </div>
