@@ -5,6 +5,7 @@ import { PutObjectCommand } from '@aws-sdk/client-s3';
 import { StartExecutionCommand } from '@aws-sdk/client-sfn';
 import { ddb, s3, sfn, env } from '../lib/aws-clients.js';
 import { parseAddressFile, FileParseError, type ParsedAddressRow } from '../lib/parse-file.js';
+import { requireAuth } from '../lib/auth.js';
 
 const MAX_ROWS_PER_JOB = 5000;
 
@@ -67,6 +68,8 @@ async function createJobWithAddresses(rows: ParsedAddressRow[], sourceType: 'sin
 }
 
 export default async function jobsRoutes(app: FastifyInstance) {
+  app.addHook('onRequest', requireAuth);
+
   app.post('/api/jobs/single', async (request, reply) => {
     const body = request.body as { address?: string };
     const address = body?.address?.trim();

@@ -19,6 +19,8 @@ export interface ApiStackProps extends StackProps {
   dataBucket: s3.Bucket;
   validationStateMachine: sfn.StateMachine;
   normalizationStateMachine: sfn.StateMachine;
+  userPoolId: string;
+  userPoolClientId: string;
 }
 
 /**
@@ -41,6 +43,8 @@ export class ApiStack extends Stack {
       dataBucket,
       validationStateMachine,
       normalizationStateMachine,
+      userPoolId,
+      userPoolClientId,
     } = props;
 
     const cluster = new ecs.Cluster(this, 'Cluster', {
@@ -69,6 +73,8 @@ export class ApiStack extends Stack {
           DATA_BUCKET: dataBucket.bucketName,
           VALIDATION_STATE_MACHINE_ARN: validationStateMachine.stateMachineArn,
           NORMALIZATION_STATE_MACHINE_ARN: normalizationStateMachine.stateMachineArn,
+          COGNITO_USER_POOL_ID: userPoolId,
+          COGNITO_CLIENT_ID: userPoolClientId,
         },
         logDriver: ecs.LogDrivers.awsLogs({
           streamPrefix: 'api',

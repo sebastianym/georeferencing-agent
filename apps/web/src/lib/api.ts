@@ -1,4 +1,23 @@
+import { getAccessToken, logout } from '@/lib/auth';
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? '';
+
+// Wraps fetch with the Cognito access token attached and a shared 401
+// handler — every job/address call goes through this, so a session that's
+// expired or was never established sends the user straight back to /login
+// instead of surfacing a confusing raw API error.
+async function authFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const token = await getAccessToken();
+  const headers = new Headers(init.headers);
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+
+  const res = await fetch(input, { ...init, headers });
+  if (res.status === 401) {
+    logout();
+    if (typeof window !== 'undefined') window.location.href = '/login';
+  }
+  return res;
+}
 
 export interface HereResult {
   label: string;
@@ -56,7 +75,7 @@ async function handleResponse<T>(res: Response): Promise<T> {
 }
 
 export async function createSingleJob(address: string): Promise<{ jobId: string; totalCount: number }> {
-  const res = await fetch(`${API_URL}/api/jobs/single`, {
+  const res = await authFetch(`${API_URL}/api/jobs/single`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ address }),
@@ -67,17 +86,17 @@ export async function createSingleJob(address: string): Promise<{ jobId: string;
 export async function createBulkJob(file: File): Promise<{ jobId: string; totalCount: number }> {
   const formData = new FormData();
   formData.append('file', file);
-  const res = await fetch(`${API_URL}/api/jobs/bulk`, { method: 'POST', body: formData });
+  const res = await authFetch(`${API_URL}/api/jobs/bulk`, { method: 'POST', body: formData });
   return handleResponse(res);
 }
 
 export async function getJob(jobId: string): Promise<JobDetail> {
-  const res = await fetch(`${API_URL}/api/jobs/${jobId}`, { cache: 'no-store' });
+  const res = await authFetch(`${API_URL}/api/jobs/${jobId}`, { cache: 'no-store' });
   return handleResponse(res);
 }
 
 export async function listJobs(): Promise<{ jobs: JobRecord[] }> {
-  const res = await fetch(`${API_URL}/api/jobs`, { cache: 'no-store' });
+  const res = await authFetch(`${API_URL}/api/jobs`, { cache: 'no-store' });
   return handleResponse(res);
 }
 
@@ -85,7 +104,7 @@ export async function normalizeAddresses(
   jobId: string,
   addressIds: string[]
 ): Promise<{ jobId: string; normalizing: number }> {
-  const res = await fetch(`${API_URL}/api/jobs/${jobId}/normalize`, {
+  const res = await authFetch(`${API_URL}/api/jobs/${jobId}/normalize`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ addressIds }),

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Script from "next/script";
 import { Toaster } from "@/components/ui/sonner";
 import { SiteHeader } from "@/components/app/site-header";
+import { AuthGuard } from "@/components/app/auth-guard";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -29,7 +30,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <Script src={`https://js.api.here.com/v3/${HERE_MAPS_VERSION}/mapsjs-mapevents.js`} strategy="afterInteractive" />
         <Script src={`https://js.api.here.com/v3/${HERE_MAPS_VERSION}/mapsjs-ui.js`} strategy="afterInteractive" />
         <SiteHeader />
-        <main className="flex min-h-0 flex-1 flex-col overflow-y-auto">{children}</main>
+        <main className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+          <AuthGuard>{children}</AuthGuard>
+        </main>
         <Toaster />
       </body>
     </html>

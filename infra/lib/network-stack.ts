@@ -54,6 +54,11 @@ export class NetworkStack extends Stack {
       ['LogsEndpoint', ec2.InterfaceVpcEndpointAwsService.CLOUDWATCH_LOGS],
       ['SecretsManagerEndpoint', ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER],
       ['StepFunctionsEndpoint', ec2.InterfaceVpcEndpointAwsService.STEP_FUNCTIONS],
+      // The API task verifies Cognito access tokens against the pool's
+      // public JWKS at cognito-idp.<region>.amazonaws.com/.well-known/
+      // jwks.json — same hostname as the Cognito IDP API, so this endpoint's
+      // private DNS covers that fetch too, not just SigV4 API calls.
+      ['CognitoIdpEndpoint', ec2.InterfaceVpcEndpointAwsService.COGNITO_IDP],
     ];
 
     // Shared by all interface endpoints. Ingress is scoped to the VPC CIDR

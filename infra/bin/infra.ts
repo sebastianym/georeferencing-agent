@@ -5,6 +5,7 @@ import { DataStack } from '../lib/data-stack';
 import { AgentStack } from '../lib/agent-stack';
 import { ProcessingStack } from '../lib/processing-stack';
 import { ApiStack } from '../lib/api-stack';
+import { AuthStack } from '../lib/auth-stack';
 
 const app = new cdk.App();
 
@@ -16,6 +17,7 @@ const env = {
 const network = new NetworkStack(app, 'GeoAgent-Network', { env });
 const data = new DataStack(app, 'GeoAgent-Data', { env });
 const agent = new AgentStack(app, 'GeoAgent-Agent', { env });
+const auth = new AuthStack(app, 'GeoAgent-Auth', { env });
 
 const processing = new ProcessingStack(app, 'GeoAgent-Processing', {
   env,
@@ -35,4 +37,6 @@ new ApiStack(app, 'GeoAgent-Api', {
   dataBucket: data.bucket,
   validationStateMachine: processing.validationStateMachine,
   normalizationStateMachine: processing.normalizationStateMachine,
+  userPoolId: auth.userPool.userPoolId,
+  userPoolClientId: auth.userPoolClient.userPoolClientId,
 });
