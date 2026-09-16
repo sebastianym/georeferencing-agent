@@ -3,6 +3,7 @@ import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import healthRoutes from './routes/health.js';
 import jobsRoutes from './routes/jobs.js';
+import adminRoutes from './routes/admin.js';
 
 const app = Fastify({ logger: true });
 
@@ -11,6 +12,7 @@ await app.register(multipart, { limits: { fileSize: 10 * 1024 * 1024 } });
 
 await app.register(healthRoutes);
 await app.register(jobsRoutes);
+await app.register(adminRoutes);
 
 const port = Number(process.env.PORT ?? 8080);
 app

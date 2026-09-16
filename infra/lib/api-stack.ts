@@ -8,6 +8,7 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import * as wafv2 from 'aws-cdk-lib/aws-wafv2';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as path from 'path';
@@ -75,6 +76,11 @@ export class ApiStack extends Stack {
           NORMALIZATION_STATE_MACHINE_ARN: normalizationStateMachine.stateMachineArn,
           COGNITO_USER_POOL_ID: userPoolId,
           COGNITO_CLIENT_ID: userPoolClientId,
+          // Also enforced server-side in the PreSignUp trigger (see
+          // AuthStack) — this copy gates who's allowed to call
+          // /api/admin/users at all, that one gates the email actually
+          // being created, independently of each other.
+          ADMIN_EMAIL_DOMAIN: 'cnid.co',
         },
         logDriver: ecs.LogDrivers.awsLogs({
           streamPrefix: 'api',
@@ -90,6 +96,16 @@ export class ApiStack extends Stack {
     dataBucket.grantReadWrite(this.service.taskDefinition.taskRole);
     validationStateMachine.grantStartExecution(this.service.taskDefinition.taskRole);
     normalizationStateMachine.grantStartExecution(this.service.taskDefinition.taskRole);
+
+    // Scoped to just this one user pool and just account creation — the API
+    // task can't do anything else administrative in Cognito (no password
+    // resets, no deletes, no reading other users' data).
+    this.service.taskDefinition.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ['cognito-idp:AdminCreateUser'],
+        resources: [`arn:aws:cognito-idp:${this.region}:${this.account}:userpool/${userPoolId}`],
+      })
+    );
 
     const webAcl = new wafv2.CfnWebACL(this, 'ApiWebAcl', {
       scope: 'REGIONAL',

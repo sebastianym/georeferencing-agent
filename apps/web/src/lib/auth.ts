@@ -1,6 +1,7 @@
 const REGION = process.env.NEXT_PUBLIC_AWS_REGION ?? 'us-east-1';
 const CLIENT_ID = process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID ?? '';
 const COGNITO_ENDPOINT = `https://cognito-idp.${REGION}.amazonaws.com/`;
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? '';
 const STORAGE_KEY = 'geoagent_session';
 
 interface StoredSession {
@@ -56,14 +57,7 @@ async function cognitoRequest(action: string, body: unknown): Promise<any> {
   return data;
 }
 
-export async function login(email: string, password: string): Promise<void> {
-  const data = await cognitoRequest('InitiateAuth', {
-    AuthFlow: 'USER_PASSWORD_AUTH',
-    ClientId: CLIENT_ID,
-    AuthParameters: { USERNAME: email, PASSWORD: password },
-  });
-  const result = data.AuthenticationResult;
-  if (!result) throw new Error('No se pudo iniciar sesión.');
+function saveFromAuthenticationResult(result: any): void {
   saveSession({
     accessToken: result.AccessToken,
     idToken: result.IdToken,
@@ -72,34 +66,43 @@ export async function login(email: string, password: string): Promise<void> {
   });
 }
 
-// Starts self-service sign-up. Cognito's PreSignUp trigger rejects the
-// request server-side if the email's domain isn't allowed — that check
-// can't be duplicated safely on the client, so a domain that looks wrong
-// still gets sent and comes back as a normal error from this call.
-export async function signUp(email: string, password: string): Promise<void> {
-  await cognitoRequest('SignUp', {
+export type LoginResult =
+  | { ok: true }
+  // Accounts created by an admin start with a Cognito-generated temporary
+  // password and must be given a real one on first login before they can
+  // do anything else — the caller (the login page) needs to catch this and
+  // show a "set your password" step instead of treating it as a failure.
+  | { ok: false; challenge: 'NEW_PASSWORD_REQUIRED'; email: string; session: string };
+
+export async function login(email: string, password: string): Promise<LoginResult> {
+  const data = await cognitoRequest('InitiateAuth', {
+    AuthFlow: 'USER_PASSWORD_AUTH',
     ClientId: CLIENT_ID,
-    Username: email,
-    Password: password,
-    UserAttributes: [{ Name: 'email', Value: email }],
+    AuthParameters: { USERNAME: email, PASSWORD: password },
   });
+
+  if (data.ChallengeName === 'NEW_PASSWORD_REQUIRED') {
+    return { ok: false, challenge: 'NEW_PASSWORD_REQUIRED', email, session: data.Session };
+  }
+
+  const result = data.AuthenticationResult;
+  if (!result) throw new Error('No se pudo iniciar sesión.');
+  saveFromAuthenticationResult(result);
+  return { ok: true };
 }
 
-// The code Cognito emailed after signUp() — confirms the account and
-// marks the email verified. Login only works after this succeeds.
-export async function confirmSignUp(email: string, code: string): Promise<void> {
-  await cognitoRequest('ConfirmSignUp', {
+// Completes the NEW_PASSWORD_REQUIRED challenge from login() above and logs
+// the user in with the password they just set.
+export async function completeNewPassword(email: string, newPassword: string, session: string): Promise<void> {
+  const data = await cognitoRequest('RespondToAuthChallenge', {
     ClientId: CLIENT_ID,
-    Username: email,
-    ConfirmationCode: code,
+    ChallengeName: 'NEW_PASSWORD_REQUIRED',
+    Session: session,
+    ChallengeResponses: { USERNAME: email, NEW_PASSWORD: newPassword },
   });
-}
-
-export async function resendConfirmationCode(email: string): Promise<void> {
-  await cognitoRequest('ResendConfirmationCode', {
-    ClientId: CLIENT_ID,
-    Username: email,
-  });
+  const result = data.AuthenticationResult;
+  if (!result) throw new Error('No se pudo definir la contraseña.');
+  saveFromAuthenticationResult(result);
 }
 
 async function refreshSession(session: StoredSession): Promise<StoredSession | null> {
@@ -126,9 +129,7 @@ async function refreshSession(session: StoredSession): Promise<StoredSession | n
   }
 }
 
-// Returns a currently-valid access token, transparently refreshing first if
-// it's expired or about to expire. Callers attach this as a Bearer header.
-export async function getAccessToken(): Promise<string | null> {
+async function ensureFreshSession(): Promise<StoredSession | null> {
   let session = loadSession();
   if (!session) return null;
   if (session.expiresAt - Date.now() < 30_000) {
@@ -138,7 +139,21 @@ export async function getAccessToken(): Promise<string | null> {
       return null;
     }
   }
-  return session.accessToken;
+  return session;
+}
+
+// Returns a currently-valid access token, transparently refreshing first if
+// it's expired or about to expire. Callers attach this as a Bearer header.
+export async function getAccessToken(): Promise<string | null> {
+  const session = await ensureFreshSession();
+  return session?.accessToken ?? null;
+}
+
+// The ID token carries the caller's verified email — the access token
+// doesn't. Only needed for the admin user-creation call.
+export async function getIdToken(): Promise<string | null> {
+  const session = await ensureFreshSession();
+  return session?.idToken ?? null;
 }
 
 export function isAuthenticated(): boolean {
@@ -147,4 +162,26 @@ export function isAuthenticated(): boolean {
 
 export function logout(): void {
   clearSession();
+}
+
+// Creates a new account. Requires the caller to already be logged in as a
+// @cnid.co user — enforced server-side (requireCnidCoAdmin), not just by
+// hiding the /admin page from everyone else.
+export async function adminCreateUser(email: string): Promise<void> {
+  const [accessToken, idToken] = await Promise.all([getAccessToken(), getIdToken()]);
+  if (!accessToken || !idToken) throw new Error('Tu sesión expiró. Volvé a iniciar sesión.');
+
+  const res = await fetch(`${API_URL}/api/admin/users`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+      'X-Id-Token': idToken,
+    },
+    body: JSON.stringify({ email }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(body.error ?? 'No se pudo crear el usuario.');
+  }
 }

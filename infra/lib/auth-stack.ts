@@ -6,12 +6,13 @@ import * as nodejs from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as path from 'path';
 
 /**
- * Cognito User Pool for gating the demo behind a login. Self-service
- * sign-up is enabled but restricted to a single email domain via a
- * PreSignUp trigger (see services/lambdas/pre-signup) — anyone with an
- * address on that domain can create their own account and confirm it with
- * the code Cognito emails them; nobody else gets past the trigger. The
- * first two accounts were still admin-created via CLI before this existed.
+ * Cognito User Pool for gating the demo behind a login. No public sign-up:
+ * accounts only come from an authenticated admin (@cnid.co) using the
+ * app's /admin page, which calls AdminCreateUser through the API — see
+ * requireCnidCoAdmin in apps/api. The PreSignUp trigger (see
+ * services/lambdas/pre-signup) still runs on that path too and rejects
+ * anything outside the allowed domain as a second, server-side check that
+ * doesn't rely on the API remembering to enforce it correctly.
  */
 export class AuthStack extends Stack {
   public readonly userPool: cognito.UserPool;
@@ -36,7 +37,7 @@ export class AuthStack extends Stack {
 
     this.userPool = new cognito.UserPool(this, 'UserPool', {
       userPoolName: 'georeferencing-agent',
-      selfSignUpEnabled: true,
+      selfSignUpEnabled: false,
       signInAliases: { email: true },
       autoVerify: { email: true },
       passwordPolicy: {

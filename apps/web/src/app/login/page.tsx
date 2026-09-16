@@ -3,22 +3,11 @@
 import { useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { login, signUp, confirmSignUp, resendConfirmationCode } from '@/lib/auth';
-import {
-  Compass,
-  Eye,
-  EyeOff,
-  Loader2,
-  Lock,
-  Mail,
-  MapPin,
-  ShieldCheck,
-  Sparkles,
-} from 'lucide-react';
+import { login, completeNewPassword } from '@/lib/auth';
+import { Compass, Eye, EyeOff, Loader2, Lock, Mail, MapPin, ShieldCheck, Sparkles } from 'lucide-react';
 
 function PasswordInput({
   id,
@@ -56,23 +45,6 @@ function PasswordInput({
   );
 }
 
-function EmailInput({ id, value, onChange }: { id: string; value: string; onChange: (v: string) => void }) {
-  return (
-    <div className="relative">
-      <Mail className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
-      <Input
-        id={id}
-        type="email"
-        autoComplete="username"
-        required
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="pl-8"
-      />
-    </div>
-  );
-}
-
 const PILLARS = [
   { icon: Sparkles, label: 'Optimización con IA de extremo a extremo' },
   { icon: MapPin, label: 'Precisión medible, antes y después' },
@@ -81,85 +53,54 @@ const PILLARS = [
 
 export default function LoginPage() {
   const router = useRouter();
-  const [tab, setTab] = useState<'login' | 'register'>('login');
-  const [confirming, setConfirming] = useState(false);
 
-  const [loginEmail, setLoginEmail] = useState('');
-  const [loginPassword, setLoginPassword] = useState('');
-  const [loginSubmitting, setLoginSubmitting] = useState(false);
-  const [loginError, setLoginError] = useState<string | null>(null);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const [regEmail, setRegEmail] = useState('');
-  const [regPassword, setRegPassword] = useState('');
-  const [regPasswordConfirm, setRegPasswordConfirm] = useState('');
-  const [regSubmitting, setRegSubmitting] = useState(false);
-  const [regError, setRegError] = useState<string | null>(null);
-
-  const [code, setCode] = useState('');
-  const [confirmSubmitting, setConfirmSubmitting] = useState(false);
-  const [confirmError, setConfirmError] = useState<string | null>(null);
-  const [resendNotice, setResendNotice] = useState<string | null>(null);
+  // Set only when login() reports a NEW_PASSWORD_REQUIRED challenge — an
+  // admin-created account logging in for the first time.
+  const [pendingSession, setPendingSession] = useState<string | null>(null);
+  const [newPassword, setNewPassword] = useState('');
+  const [newPasswordConfirm, setNewPasswordConfirm] = useState('');
+  const [newPasswordSubmitting, setNewPasswordSubmitting] = useState(false);
+  const [newPasswordError, setNewPasswordError] = useState<string | null>(null);
 
   async function handleLogin(e: FormEvent) {
     e.preventDefault();
-    setLoginSubmitting(true);
-    setLoginError(null);
+    setSubmitting(true);
+    setError(null);
     try {
-      await login(loginEmail, loginPassword);
+      const result = await login(email, password);
+      if (!result.ok) {
+        setPendingSession(result.session);
+        return;
+      }
       router.replace('/');
     } catch (err) {
-      setLoginError(err instanceof Error ? err.message : 'No se pudo iniciar sesión.');
+      setError(err instanceof Error ? err.message : 'No se pudo iniciar sesión.');
     } finally {
-      setLoginSubmitting(false);
+      setSubmitting(false);
     }
   }
 
-  async function handleRegister(e: FormEvent) {
+  async function handleNewPassword(e: FormEvent) {
     e.preventDefault();
-    setRegError(null);
-    if (regPassword !== regPasswordConfirm) {
-      setRegError('Las contraseñas no coinciden.');
+    setNewPasswordError(null);
+    if (newPassword !== newPasswordConfirm) {
+      setNewPasswordError('Las contraseñas no coinciden.');
       return;
     }
-    setRegSubmitting(true);
+    if (!pendingSession) return;
+    setNewPasswordSubmitting(true);
     try {
-      await signUp(regEmail, regPassword);
-      setConfirming(true);
+      await completeNewPassword(email, newPassword, pendingSession);
+      router.replace('/');
     } catch (err) {
-      setRegError(err instanceof Error ? err.message : 'No se pudo crear la cuenta.');
+      setNewPasswordError(err instanceof Error ? err.message : 'No se pudo definir la contraseña.');
     } finally {
-      setRegSubmitting(false);
-    }
-  }
-
-  async function handleConfirm(e: FormEvent) {
-    e.preventDefault();
-    setConfirmSubmitting(true);
-    setConfirmError(null);
-    try {
-      await confirmSignUp(regEmail, code);
-      setConfirming(false);
-      setTab('login');
-      setLoginEmail(regEmail);
-      setLoginPassword('');
-      setRegPassword('');
-      setRegPasswordConfirm('');
-      setCode('');
-    } catch (err) {
-      setConfirmError(err instanceof Error ? err.message : 'No se pudo confirmar el código.');
-    } finally {
-      setConfirmSubmitting(false);
-    }
-  }
-
-  async function handleResend() {
-    setResendNotice(null);
-    setConfirmError(null);
-    try {
-      await resendConfirmationCode(regEmail);
-      setResendNotice('Te reenviamos el código.');
-    } catch (err) {
-      setConfirmError(err instanceof Error ? err.message : 'No se pudo reenviar el código.');
+      setNewPasswordSubmitting(false);
     }
   }
 
@@ -202,96 +143,22 @@ export default function LoginPage() {
             Agente de Georeferenciación
           </div>
 
-          {confirming ? (
+          {pendingSession ? (
             <Card className="border-none shadow-none">
               <CardHeader className="px-0">
-                <CardTitle>Confirmá tu cuenta</CardTitle>
+                <CardTitle>Definí tu contraseña</CardTitle>
                 <CardDescription>
-                  Te enviamos un código a <span className="font-medium text-foreground">{regEmail}</span>. Ingresalo
-                  para activar tu cuenta.
+                  Es tu primer ingreso. Elegí una contraseña propia para <span className="font-medium text-foreground">{email}</span>.
                 </CardDescription>
               </CardHeader>
               <CardContent className="px-0">
-                <form onSubmit={handleConfirm} className="flex flex-col gap-4">
+                <form onSubmit={handleNewPassword} className="flex flex-col gap-4">
                   <div className="flex flex-col gap-1.5">
-                    <Label htmlFor="code">Código de verificación</Label>
-                    <Input
-                      id="code"
-                      inputMode="numeric"
-                      autoComplete="one-time-code"
-                      required
-                      value={code}
-                      onChange={(e) => setCode(e.target.value)}
-                      placeholder="123456"
-                    />
-                  </div>
-                  {confirmError && <p className="text-sm text-destructive">{confirmError}</p>}
-                  {resendNotice && <p className="text-sm text-brand">{resendNotice}</p>}
-                  <Button
-                    type="submit"
-                    disabled={confirmSubmitting}
-                    className="bg-brand text-brand-foreground hover:bg-brand-hover"
-                  >
-                    {confirmSubmitting && <Loader2 className="animate-spin" />}
-                    Confirmar y continuar
-                  </Button>
-                  <button
-                    type="button"
-                    onClick={handleResend}
-                    className="text-sm text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-                  >
-                    Reenviar código
-                  </button>
-                </form>
-              </CardContent>
-            </Card>
-          ) : (
-            <Tabs value={tab} onValueChange={(v) => setTab(v as 'login' | 'register')}>
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="login">Iniciar sesión</TabsTrigger>
-                <TabsTrigger value="register">Crear cuenta</TabsTrigger>
-              </TabsList>
-
-              <TabsContent value="login" className="pt-6">
-                <form onSubmit={handleLogin} className="flex flex-col gap-4">
-                  <div className="flex flex-col gap-1.5">
-                    <Label htmlFor="login-email">Correo</Label>
-                    <EmailInput id="login-email" value={loginEmail} onChange={setLoginEmail} />
-                  </div>
-                  <div className="flex flex-col gap-1.5">
-                    <Label htmlFor="login-password">Contraseña</Label>
+                    <Label htmlFor="new-password">Contraseña nueva</Label>
                     <PasswordInput
-                      id="login-password"
-                      value={loginPassword}
-                      onChange={setLoginPassword}
-                      autoComplete="current-password"
-                    />
-                  </div>
-                  {loginError && <p className="text-sm text-destructive">{loginError}</p>}
-                  <Button
-                    type="submit"
-                    disabled={loginSubmitting}
-                    className="bg-brand text-brand-foreground hover:bg-brand-hover"
-                  >
-                    {loginSubmitting && <Loader2 className="animate-spin" />}
-                    Entrar
-                  </Button>
-                </form>
-              </TabsContent>
-
-              <TabsContent value="register" className="pt-6">
-                <form onSubmit={handleRegister} className="flex flex-col gap-4">
-                  <div className="flex flex-col gap-1.5">
-                    <Label htmlFor="reg-email">Correo</Label>
-                    <EmailInput id="reg-email" value={regEmail} onChange={setRegEmail} />
-                    <p className="text-xs text-muted-foreground">Solo se aceptan correos @cnid.co.</p>
-                  </div>
-                  <div className="flex flex-col gap-1.5">
-                    <Label htmlFor="reg-password">Contraseña</Label>
-                    <PasswordInput
-                      id="reg-password"
-                      value={regPassword}
-                      onChange={setRegPassword}
+                      id="new-password"
+                      value={newPassword}
+                      onChange={setNewPassword}
                       autoComplete="new-password"
                     />
                     <p className="text-xs text-muted-foreground">
@@ -299,26 +166,73 @@ export default function LoginPage() {
                     </p>
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <Label htmlFor="reg-password-confirm">Confirmar contraseña</Label>
+                    <Label htmlFor="new-password-confirm">Confirmar contraseña</Label>
                     <PasswordInput
-                      id="reg-password-confirm"
-                      value={regPasswordConfirm}
-                      onChange={setRegPasswordConfirm}
+                      id="new-password-confirm"
+                      value={newPasswordConfirm}
+                      onChange={setNewPasswordConfirm}
                       autoComplete="new-password"
                     />
                   </div>
-                  {regError && <p className="text-sm text-destructive">{regError}</p>}
+                  {newPasswordError && <p className="text-sm text-destructive">{newPasswordError}</p>}
                   <Button
                     type="submit"
-                    disabled={regSubmitting}
+                    disabled={newPasswordSubmitting}
                     className="bg-brand text-brand-foreground hover:bg-brand-hover"
                   >
-                    {regSubmitting && <Loader2 className="animate-spin" />}
-                    Crear cuenta
+                    {newPasswordSubmitting && <Loader2 className="animate-spin" />}
+                    Guardar y entrar
                   </Button>
                 </form>
-              </TabsContent>
-            </Tabs>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card className="border-none shadow-none">
+              <CardHeader className="px-0">
+                <CardTitle>Iniciar sesión</CardTitle>
+                <CardDescription>Ingresá tus credenciales para acceder al agente de georeferenciación.</CardDescription>
+              </CardHeader>
+              <CardContent className="px-0">
+                <form onSubmit={handleLogin} className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-1.5">
+                    <Label htmlFor="email">Correo</Label>
+                    <div className="relative">
+                      <Mail className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                      <Input
+                        id="email"
+                        type="email"
+                        autoComplete="username"
+                        required
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        className="pl-8"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <Label htmlFor="password">Contraseña</Label>
+                    <PasswordInput
+                      id="password"
+                      value={password}
+                      onChange={setPassword}
+                      autoComplete="current-password"
+                    />
+                  </div>
+                  {error && <p className="text-sm text-destructive">{error}</p>}
+                  <Button
+                    type="submit"
+                    disabled={submitting}
+                    className="bg-brand text-brand-foreground hover:bg-brand-hover"
+                  >
+                    {submitting && <Loader2 className="animate-spin" />}
+                    Entrar
+                  </Button>
+                  <p className="text-center text-xs text-muted-foreground">
+                    ¿No tenés cuenta? Pedile a un administrador que te la cree.
+                  </p>
+                </form>
+              </CardContent>
+            </Card>
           )}
         </div>
       </div>

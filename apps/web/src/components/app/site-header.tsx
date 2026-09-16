@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Compass, History, LogOut } from 'lucide-react';
+import { Compass, History, LogOut, UserPlus } from 'lucide-react';
 import { isAuthenticated, logout } from '@/lib/auth';
 
 export function SiteHeader() {
@@ -37,6 +37,14 @@ export function SiteHeader() {
         >
           <History className="size-4" /> Historial
         </Link>
+        {pathname !== '/login' && authed && (
+          <Link
+            href="/admin"
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+          >
+            <UserPlus className="size-4" /> Nuevo usuario
+          </Link>
+        )}
         {pathname !== '/login' && authed && (
           <button
             type="button"
