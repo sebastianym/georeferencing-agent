@@ -46,7 +46,12 @@ async function cognitoRequest(action: string, body: unknown): Promise<any> {
   });
   const data = await res.json();
   if (!res.ok) {
-    throw new Error(data.message ?? 'No se pudo iniciar sesión.');
+    // A PreSignUp Lambda rejection arrives wrapped as
+    // "PreSignUp failed with error <our message>." — strip the wrapper so
+    // the UI shows just the actual reason.
+    const message: string = data.message ?? 'Ocurrió un error. Intentá de nuevo.';
+    const unwrapped = message.match(/^PreSignUp failed with error (.+)$/)?.[1] ?? message;
+    throw new Error(unwrapped);
   }
   return data;
 }
@@ -64,6 +69,36 @@ export async function login(email: string, password: string): Promise<void> {
     idToken: result.IdToken,
     refreshToken: result.RefreshToken,
     expiresAt: Date.now() + result.ExpiresIn * 1000,
+  });
+}
+
+// Starts self-service sign-up. Cognito's PreSignUp trigger rejects the
+// request server-side if the email's domain isn't allowed — that check
+// can't be duplicated safely on the client, so a domain that looks wrong
+// still gets sent and comes back as a normal error from this call.
+export async function signUp(email: string, password: string): Promise<void> {
+  await cognitoRequest('SignUp', {
+    ClientId: CLIENT_ID,
+    Username: email,
+    Password: password,
+    UserAttributes: [{ Name: 'email', Value: email }],
+  });
+}
+
+// The code Cognito emailed after signUp() — confirms the account and
+// marks the email verified. Login only works after this succeeds.
+export async function confirmSignUp(email: string, code: string): Promise<void> {
+  await cognitoRequest('ConfirmSignUp', {
+    ClientId: CLIENT_ID,
+    Username: email,
+    ConfirmationCode: code,
+  });
+}
+
+export async function resendConfirmationCode(email: string): Promise<void> {
+  await cognitoRequest('ResendConfirmationCode', {
+    ClientId: CLIENT_ID,
+    Username: email,
   });
 }
 

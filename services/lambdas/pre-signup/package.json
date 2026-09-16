@@ -1,0 +1,9 @@
+{
+  "name": "@georeferencing-agent/lambda-pre-signup",
+  "private": true,
+  "version": "0.1.0",
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.145",
+    "@types/node": "^20.11.1"
+  }
+}
