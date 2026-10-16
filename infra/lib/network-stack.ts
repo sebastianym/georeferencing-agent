@@ -54,11 +54,6 @@ export class NetworkStack extends Stack {
       ['LogsEndpoint', ec2.InterfaceVpcEndpointAwsService.CLOUDWATCH_LOGS],
       ['SecretsManagerEndpoint', ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER],
       ['StepFunctionsEndpoint', ec2.InterfaceVpcEndpointAwsService.STEP_FUNCTIONS],
-      // The API task verifies Cognito access tokens against the pool's
-      // public JWKS at cognito-idp.<region>.amazonaws.com/.well-known/
-      // jwks.json — same hostname as the Cognito IDP API, so this endpoint's
-      // private DNS covers that fetch too, not just SigV4 API calls.
-      ['CognitoIdpEndpoint', ec2.InterfaceVpcEndpointAwsService.COGNITO_IDP],
     ];
 
     // Shared by all interface endpoints. Ingress is scoped to the VPC CIDR
@@ -78,17 +73,40 @@ export class NetworkStack extends Stack {
       'HTTPS from within the VPC'
     );
 
-    // Single-AZ on purpose: each interface endpoint is billed per-AZ-hour,
-    // so 5 endpoints x 2 AZs would roughly double this cost for a POC that
-    // doesn't need that redundancy. Traffic from the other AZ still reaches
-    // it fine (cross-AZ, same VPC); an AZ outage would be an acceptable risk
-    // for a one-month demo, not for a production workload.
+    // Spans both AZs of the VPC rather than pinning to a single named one —
+    // which physical AZ a given index maps to is randomized per AWS
+    // account, so a hardcoded index risks landing on one that doesn't
+    // support a given endpoint service.
     for (const [endpointId, service] of interfaceServices) {
       this.vpc.addInterfaceEndpoint(endpointId, {
         service,
-        subnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED, availabilityZones: [this.vpc.availabilityZones[0]] },
+        subnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
         securityGroups: [endpointsSecurityGroup],
       });
     }
+
+    // Cognito IDP gets its own endpoint, deliberately NOT spanning every AZ:
+    // the service isn't available in every AZ of every account (hit this
+    // live — this account's first AZ doesn't support it, even though the
+    // same code worked fine in another account whose first AZ did), and
+    // unlike the endpoints above, VPCEndpoint creation fails outright if any
+    // one of its target AZs lacks support rather than just skipping it. We
+    // can't know in advance which AZs a fresh account will support, so this
+    // drops the first AZ and uses the rest — if it ever fails again on a new
+    // account, check with:
+    //   aws ec2 describe-vpc-endpoint-services \
+    //     --service-names com.amazonaws.<region>.cognito-idp \
+    //     --query 'ServiceDetails[0].AvailabilityZones'
+    // and adjust the slice accordingly.
+    //
+    // The API task verifies Cognito access tokens against the pool's public
+    // JWKS at cognito-idp.<region>.amazonaws.com/.well-known/jwks.json —
+    // same hostname as the Cognito IDP API, so this endpoint's private DNS
+    // covers that fetch too, not just SigV4 API calls.
+    this.vpc.addInterfaceEndpoint('CognitoIdpEndpoint', {
+      service: ec2.InterfaceVpcEndpointAwsService.COGNITO_IDP,
+      subnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED, availabilityZones: this.vpc.availabilityZones.slice(1) },
+      securityGroups: [endpointsSecurityGroup],
+    });
   }
 }

@@ -31,7 +31,15 @@ export class AuthStack extends Stack {
       bundling: { minify: true, sourceMap: false },
       entry: path.join(__dirname, '../../services/lambdas/pre-signup/src/index.ts'),
       environment: {
-        ALLOWED_EMAIL_DOMAIN: 'cnid.co',
+        // cnid.co administers the app; servientrega.com is the client team
+        // actually using it day to day, so both need to be creatable
+        // through AdminCreateUser. ALLOWED_EMAILS is a narrow escape hatch
+        // for the rare one-off account outside both domains (e.g. an
+        // external gmail.com address) — it's an exact-match allowlist, not
+        // another open domain, so it can't be used to onboard anyone at
+        // will the way a domain grant could.
+        ALLOWED_EMAIL_DOMAINS: 'cnid.co,servientrega.com',
+        ALLOWED_EMAILS: 'frankithy@gmail.com',
       },
     });
 

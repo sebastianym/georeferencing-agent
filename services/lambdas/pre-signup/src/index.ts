@@ -1,20 +1,38 @@
 import type { PreSignUpTriggerHandler } from 'aws-lambda';
 
-// Cognito calls this before a self-service sign-up is accepted. Throwing
-// rejects the sign-up outright (the client gets a generic error back); the
-// email domain is the only thing checked here — Cognito's own email
-// verification code (sent after this trigger allows the sign-up through)
-// is what actually proves the person controls that inbox, so this is not a
-// substitute for that, just a first filter on who gets that far.
-const ALLOWED_DOMAIN = (process.env.ALLOWED_EMAIL_DOMAIN ?? '').toLowerCase();
+// Cognito calls this before a self-service sign-up is accepted, and also
+// before AdminCreateUser (the app's actual signup path — see auth-stack.ts).
+// Throwing rejects the account creation outright. Two allowlists:
+//  - ALLOWED_EMAIL_DOMAINS: comma-separated domains whose addresses can
+//    always be created (the admin's own org plus whichever client org is
+//    actually using the app — both administer/use it as of this deploy).
+//  - ALLOWED_EMAILS: exact-match allowlist for the rare one-off address
+//    outside those domains. Deliberately exact, not another open domain —
+//    granting a single address doesn't let an admin onboard anyone else
+//    at will the way a domain grant would.
+const ALLOWED_DOMAINS = (process.env.ALLOWED_EMAIL_DOMAINS ?? '')
+  .toLowerCase()
+  .split(',')
+  .map((d) => d.trim())
+  .filter(Boolean);
+const ALLOWED_EMAILS = new Set(
+  (process.env.ALLOWED_EMAILS ?? '')
+    .toLowerCase()
+    .split(',')
+    .map((e) => e.trim())
+    .filter(Boolean)
+);
 
 export const handler: PreSignUpTriggerHandler = async (event) => {
   const email = (event.request.userAttributes.email ?? '').toLowerCase();
 
-  if (!ALLOWED_DOMAIN || !email.endsWith(`@${ALLOWED_DOMAIN}`)) {
+  const allowed = ALLOWED_EMAILS.has(email) || ALLOWED_DOMAINS.some((domain) => email.endsWith(`@${domain}`));
+
+  if (!allowed) {
     // No trailing period — Cognito appends its own "." after this message
     // when it wraps it as UserLambdaValidationException.
-    throw new Error(`El registro solo está disponible para correos @${ALLOWED_DOMAIN}`);
+    const domainsList = ALLOWED_DOMAINS.map((d) => `@${d}`).join(', ');
+    throw new Error(`El registro solo está disponible para correos ${domainsList}`);
   }
 
   return event;
